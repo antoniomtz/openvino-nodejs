@@ -1,69 +1,78 @@
-let videoContext, overlayContext
-const video = document.getElementById('video')
-const overlay = document.getElementById('overlay')
-
-async function preprocessFrame(imageData) {
-    // Convert image data to tensor
-    // Note: This is a simplified version - we need to properly handle
-    // color conversion and normalization based on model requirements
-    const inputTensor = new ov.Tensor(
-        new Float32Array(imageData.data),
-        [1, 3, 480, 640]
-    )
-    return inputTensor
-}
+// renderer.js
+const { ipcRenderer } = require('electron');
+const video = document.getElementById('video');
+const overlay = document.getElementById('overlay');
+const resizeCanvas = document.createElement('canvas');
+let overlayContext;
 
 async function setupWebcam() {
-    const video = document.getElementById('video')
-    const overlay = document.getElementById('overlay')
-    const cameraSelect = document.getElementById('cameraSelect')
+    const cameraSelect = document.getElementById('cameraSelect');
+
+    // Initialize canvases
+    overlay.width = 640;
+    overlay.height = 480;
+    resizeCanvas.width = 256;
+    resizeCanvas.height = 256;
     
-    videoContext = video.getContext('2d')
-    overlayContext = overlay.getContext('2d')
+    // Get context with explicit settings
+    overlayContext = overlay.getContext('2d', {
+        alpha: true,
+        willReadFrequently: false,
+        desynchronized: true
+    });
     
+    // Ensure fresh context state
+    overlayContext.reset();
+
     try {
-        const devices = await navigator.mediaDevices.enumerateDevices()
-        const videoDevices = devices.filter(device => device.kind === 'videoinput')
-        
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const videoDevices = devices.filter(device => device.kind === 'videoinput');
+
         videoDevices.forEach(device => {
-            const option = document.createElement('option')
-            option.value = device.deviceId
-            option.text = device.label || `Camera ${cameraSelect.length + 1}`
-            cameraSelect.appendChild(option)
-        })
-        
+            const option = document.createElement('option');
+            option.value = device.deviceId;
+            option.text = device.label || `Camera ${cameraSelect.length + 1}`;
+            cameraSelect.appendChild(option);
+        });
+
         if (videoDevices.length > 0) {
-            startStream(videoDevices[0].deviceId)
+            await startVideoStream(videoDevices[0].deviceId);
         }
-        
+
         cameraSelect.addEventListener('change', (event) => {
-            startStream(event.target.value)
-        })
+            startVideoStream(event.target.value);
+        });
     } catch (error) {
-        console.error('Error accessing webcam:', error)
+        console.error('Error accessing webcam:', error);
     }
 }
 
-async function startStream(deviceId) {
+async function startVideoStream(deviceId) {
     try {
-        const stream = await navigator.mediaDevices.getUserMedia({
+        const constraints = {
             video: {
                 deviceId: deviceId ? { exact: deviceId } : undefined,
-                width: 640,
-                height: 480
+                width: { ideal: 640 },
+                height: { ideal: 480 }
             }
-        })
-        
+        };
+
         if (video.srcObject) {
-            video.srcObject.getTracks().forEach(track => track.stop())
+            video.srcObject.getTracks().forEach(track => track.stop());
         }
+
+        const stream = await navigator.mediaDevices.getUserMedia(constraints);
+        video.srcObject = stream;
         
-        video.srcObject = stream
-        video.addEventListener('play', () => {
-            processFrame()
-        })
+        // Reset overlay context when switching streams
+        overlayContext.reset();
+        
+        video.onloadedmetadata = () => {
+            video.play();
+            processFrame();
+        };
     } catch (error) {
-        console.error('Error starting video stream:', error)
+        console.error('Error starting video stream:', error);
     }
 }
 
@@ -71,34 +80,90 @@ async function processFrame() {
     if (video.paused || video.ended) return;
 
     try {
-        // Get video frame
-        videoContext.drawImage(video, 0, 0, 640, 480)
-        const imageData = videoContext.getImageData(0, 0, 640, 480)
+        // Start fresh with each frame
+        overlayContext.clearRect(0, 0, 640, 480);
         
-        // Preprocess frame
-        const inputTensor = await preprocessFrame(imageData)
+        // Save the context state
+        overlayContext.save();
         
-        // Set input tensor
-        await infer.set_input_tensor(0, inputTensor)
+        // Draw corner markers first
+        overlayContext.fillStyle = '#FF0000';
+        overlayContext.fillRect(0, 0, 40, 40);        // Top-left marker
+        overlayContext.fillRect(600, 0, 40, 40);      // Top-right marker
+        overlayContext.fillRect(0, 440, 40, 40);      // Bottom-left marker
+        overlayContext.fillRect(600, 440, 40, 40);    // Bottom-right marker
+
+        // Process frame for inference
+        const resizeContext = resizeCanvas.getContext('2d');
+        resizeContext.drawImage(video, 0, 0, 256, 256);
+        const resizedData = resizeContext.getImageData(0, 0, 256, 256);
+
+        const bgrData = new Uint8Array(256 * 256 * 3);
+        for (let i = 0, j = 0; i < resizedData.data.length; i += 4, j += 3) {
+            bgrData[j] = resizedData.data[i + 2];
+            bgrData[j + 1] = resizedData.data[i + 1];
+            bgrData[j + 2] = resizedData.data[i];
+        }
+
+        const frameData = {
+            pixels: bgrData,
+            shape: [1, 3, 256, 256],
+        };
+
+        const result = await ipcRenderer.invoke('process-frame', frameData);
+
+        // Set up text rendering with fresh context state
+        overlayContext.restore();
+        overlayContext.save();
         
-        // Perform inference
-        await infer.infer()
+        // Configure text rendering
+        overlayContext.textBaseline = 'top';
+        overlayContext.textAlign = 'left';
+        overlayContext.font = 'bold 40px Arial';
+        overlayContext.fillStyle = '#FFFFFF';
         
-        // Get results
-        const output = await infer.get_output_tensor(0)
-        const results = output.data
-        
-        // Clear previous drawings
-        overlayContext.clearRect(0, 0, 640, 480)
-        
-        // Process and visualize results
-        // Note: Need to properly interpret results based on model output format
-        
-        // Process next frame
-        requestAnimationFrame(processFrame)
+        // Add stroke to make text more visible
+        overlayContext.strokeStyle = '#000000';
+        overlayContext.lineWidth = 3;
+        overlayContext.strokeText('TEST TEXT', 200, 100);
+        overlayContext.fillText('TEST TEXT', 200, 100);
+
+        if (result.detections && result.detections.length > 0) {
+            const detection = result.detections[0];
+            
+            // Fresh context state for detection box
+            overlayContext.restore();
+            overlayContext.save();
+            
+            // Draw detection box
+            overlayContext.strokeStyle = '#FF0000';
+            overlayContext.lineWidth = 8;
+            
+            const x = detection.bbox.x_min * 640;
+            const y = detection.bbox.y_min * 480;
+            const width = (detection.bbox.x_max - detection.bbox.x_min) * 640;
+            const height = (detection.bbox.y_max - detection.bbox.y_min) * 480;
+            
+            overlayContext.strokeRect(x, y, width, height);
+
+            // Draw confidence score with stroke
+            const score = Math.round(detection.confidence * 100);
+            overlayContext.strokeText(`${score}%`, x, y - 10);
+            overlayContext.fillText(`${score}%`, x, y - 10);
+        } else {
+            overlayContext.strokeText('NO FACE', 250, 250);
+            overlayContext.fillText('NO FACE', 250, 250);
+        }
+
+        // Restore final context state
+        overlayContext.restore();
+
     } catch (error) {
-        console.error('Error processing frame:', error)
+        console.error('Error in processFrame:', error);
     }
+
+    requestAnimationFrame(processFrame);
 }
 
-document.addEventListener('DOMContentLoaded', setupWebcam)
+// Initialize when the document is ready
+document.addEventListener('DOMContentLoaded', setupWebcam);

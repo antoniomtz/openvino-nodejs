@@ -6,7 +6,8 @@
         "start": "electron ."
     },
     "dependencies": {
-        "electron": "^33.3.0",
-        "openvino-node": "^2024.5.0-0"
+        "electron": "^23.3.13",        
+        "openvino-node": "^2024.3.0",
+        "@napi-rs/canvas": "^0.1.59" 
     }
 }
