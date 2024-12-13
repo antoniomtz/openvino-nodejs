@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>OpenVINO Webcam Analyzer</title>
+    <style>
+        body {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 20px;
+            font-family: system-ui, -apple-system, sans-serif;
+        }
+        select {
+            margin: 20px 0;
+            padding: 8px;
+            width: 300px;
+        }
+        .video-container {
+            position: relative;
+        }
+        video {
+            border: 1px solid #ccc;
+            border-radius: 4px;
+        }
+        canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+        }
+    </style>
+</head>
+<body>
+    <select id="cameraSelect"></select>
+    <div class="video-container">
+        <video id="video" width="640" height="480" autoplay></video>
+        <canvas id="overlay" width="640" height="480"></canvas>
+    </div>
+    <script src="renderer.js"></script>
+</body>
+</html>
